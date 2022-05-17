@@ -70,15 +70,11 @@ public class GenerateReportCommand implements Runnable {
                     String thread = parts[1].substring(1, parts[1].length() - 1);
                     String name = parts[6].substring(1, parts[6].length() - 1).trim();
                     BuildStep step = steps.get(name);
-                    if (step != null) {
-                        if (step.isFinished()) {
-                            String newName = name + "_dup" + duplicates.incrementAndGet();
-                            LOG.warnf("Step with the same name was already finished - using dup suffix: %s", newName);
-                            currentDups.put(name, newName);
-                            steps.put(newName, new BuildStep(newName, thread, started));
-                        } else {
-                            throw new IllegalStateException("Steps of the same name run concurrently: " + step);
-                        }
+                    if (step != null && (step.isFinished() || !step.thread.equals(thread))) {
+                        String newName = name + "_dup" + duplicates.incrementAndGet();
+                        LOG.warnf("Step with the same name already exists - using dup suffix: %s", newName);
+                        currentDups.put(name, newName);
+                        steps.put(newName, new BuildStep(newName, thread, started));
                     } else {
                         steps.put(name, new BuildStep(name, thread, started));
                     }
@@ -89,19 +85,16 @@ public class GenerateReportCommand implements Runnable {
                     String thread = parts[1].substring(1, parts[1].length() - 1);
                     String name = parts[6].substring(1, parts[6].length() - 1).trim();
                     BuildStep step = steps.get(name);
-                    if (step == null || step.isFinished()) {
+                    if (step == null || step.isFinished() || !step.thread.equals(thread)) {
                         step = steps.get(currentDups.get(name));
                         if (step == null) {
                             throw new IllegalStateException("Step not started: " + name);
                         }
                     }
                     if (step.isFinished()) {
-                        throw new IllegalStateException("Steps of the same name run concurrently: " + step);
+                        throw new IllegalStateException("Steps of the same name already finished: " + step);
                     }
                     step.finished = finished;
-                    if (!step.thread.equals(thread)) {
-                        throw new IllegalStateException("Step " + name + " finished on a different thread: " + thread);
-                    }
                 } else if (line.contains("Beginning Quarkus augmentation")) {
                     augmentationStarted = LocalTime.parse(line.split("\\s+")[0], DateTimeFormatter.ISO_LOCAL_TIME);
                 } else if (line.contains("Quarkus augmentation completed")) {
