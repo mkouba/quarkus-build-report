@@ -43,6 +43,9 @@ public class GenerateReportCommand implements Runnable {
     @Option(names = "--slot", defaultValue = "50")
     long slot;
 
+    @Option(names = "--out", defaultValue = "report.html")
+    String out;
+
     @Override
     public void run() {
         File buildLog = new File(file);
@@ -185,7 +188,7 @@ public class GenerateReportCommand implements Runnable {
             }
         }).limit(top).collect(Collectors.toList());
 
-        File output = new File("target/report.html");
+        File output = new File(out);
         try {
             Files.writeString(output.toPath(),
                     Templates.report(Duration.between(augmentationStarted, augmentationFinished).toMillis(), steps.values(),
