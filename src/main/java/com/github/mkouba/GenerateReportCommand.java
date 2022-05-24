@@ -174,18 +174,18 @@ public class GenerateReportCommand implements Runnable {
             }
         });
 
-        List<BuildStep> top10 = steps.values().stream().sorted(new Comparator<BuildStep>() {
+        List<BuildStep> sortedSteps = steps.values().stream().sorted(new Comparator<BuildStep>() {
             @Override
             public int compare(BuildStep o1, BuildStep o2) {
                 return o2.getTime().compareTo(o1.getTime());
             }
-        }).limit(top).collect(Collectors.toList());
+        }).collect(Collectors.toList());
 
         File output = new File(out);
         try {
             Files.writeString(output.toPath(),
-                    Templates.report(Duration.between(augmentationStarted, augmentationFinished).toMillis(), steps.values(),
-                            threadToTimeline, threads, top10, appName, slotSteps,
+                    Templates.report(sortedSteps, top, Duration.between(augmentationStarted, augmentationFinished).toMillis(),
+                            threadToTimeline, threads, appName, slotSteps,
                             new SlotsInfo(slotDuration, skipSlots, numberOfSlots))
                             .render());
         } catch (IOException e) {

@@ -74,7 +74,7 @@ Executed <strong>{steps.size}</strong> build steps on <strong>{threads.size}</st
 
 <div class="top10">
 <table class="table table-striped table-hover table-sm top10-table">
-<caption>Top {top10.size} build steps</caption>
+<caption>Top {top} build steps</caption>
 <thead>
     <tr>
       <th scope="col">#</th>
@@ -84,7 +84,7 @@ Executed <strong>{steps.size}</strong> build steps on <strong>{threads.size}</st
     </tr>
 </thead>
 <tbody>
-{#for step in top10}
+{#for step in steps.take(top)}
 <tr>
     <td>{step_count}</td>
     <td>{step.name}</td>
@@ -100,7 +100,7 @@ Executed <strong>{steps.size}</strong> build steps on <strong>{threads.size}</st
 
 <div class="concurrency-level">
 <table class="table table-striped table-hover table-sm concurrency-table">
-<caption>{top10.size} slots with lowest concurrency level</caption>
+<caption>{top} slots with lowest concurrency level</caption>
 <thead>
     <tr>
       <th scope="col">#</th>
@@ -110,7 +110,7 @@ Executed <strong>{steps.size}</strong> build steps on <strong>{threads.size}</st
     </tr>
 </thead>
 <tbody>
-{#for entry in slotSteps.take(top10.size)}
+{#for entry in slotSteps.take(top)}
 <tr>
     <td>{entry_count}</td>
     <td>Slot #{entry.key}</td>

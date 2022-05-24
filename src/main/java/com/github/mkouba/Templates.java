@@ -1,6 +1,5 @@
 package com.github.mkouba;
 
-import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -16,7 +15,7 @@ import io.quarkus.qute.TemplateInstance;
 @CheckedTemplate
 public class Templates {
 
-    native static TemplateInstance report(long totalTime, Collection<BuildStep> steps, Map<String, Timeline> threadToTimeline,
-            List<String> threads, List<BuildStep> top10, String appName, List<Entry<Integer, Slot>> slotSteps, SlotsInfo slots);
+    native static TemplateInstance report(List<BuildStep> steps, int top, long totalTime, Map<String, Timeline> threadToTimeline,
+            List<String> threads, String appName, List<Entry<Integer, Slot>> slotSteps, SlotsInfo slots);
 
 }
