@@ -185,7 +185,8 @@ public class GenerateReportCommand implements Runnable {
         try {
             Files.writeString(output.toPath(),
                     Templates.report(Duration.between(augmentationStarted, augmentationFinished).toMillis(), steps.values(),
-                            threadToTimeline, threads, top10, skipSlots, appName, slotSteps)
+                            threadToTimeline, threads, top10, appName, slotSteps,
+                            new SlotsInfo(slotDuration, skipSlots, numberOfSlots))
                             .render());
         } catch (IOException e) {
             throw new IllegalArgumentException(e);
@@ -277,6 +278,19 @@ public class GenerateReportCommand implements Runnable {
             return "BuildStep [name=" + name + ", thread=" + thread + ", started=" + started + ", finished=" + finished + "]";
         }
 
+    }
+
+    public static class SlotsInfo {
+
+        public final Duration duration;
+        public final int skipped;
+        public final long count;
+
+        public SlotsInfo(Duration duration, int skipped, long count) {
+            this.duration = duration;
+            this.skipped = skipped;
+            this.count = count;
+        }
     }
 
 }

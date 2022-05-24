@@ -65,8 +65,8 @@ Executed <strong>{steps.size}</strong> build steps on <strong>{threads.size}</st
 
 <ol>
 <li><a href="#top10">Top Time-consuming Steps</a></li>
+<li><a href="#concurrency">Concurrency Levels</a></li>
 <li><a href="#timelines">Timelines</a></li>
-<li><a href="#concurrency">Concurrency Level</a></li>
 </ol>
 
 
@@ -96,7 +96,7 @@ Executed <strong>{steps.size}</strong> build steps on <strong>{threads.size}</st
 </table>
 </div>
 
-<h2 id="concurrency" class="mt-5">Concurrency Level</h2>
+<h2 id="concurrency" class="mt-5">Concurrency Levels</h2>
 
 <div class="concurrency-level">
 <table class="table table-striped table-hover table-sm concurrency-table">
@@ -131,7 +131,7 @@ Executed <strong>{steps.size}</strong> build steps on <strong>{threads.size}</st
 <h2 id="timelines" class="mt-5">Timelines</h2>
 
 <p>
-Skipped the first {skipSlots} empty slots.
+{slots.count} slots per {slots.duration.toMillis} ms - skipped the first {slots.skipped} empty slots.
 </p>
 
 <div class="timelines">
@@ -139,7 +139,7 @@ Skipped the first {skipSlots} empty slots.
 <div class="thread">
 <h3 class="pt-2">{thread}</h3 class="mt-2">
 {#for slot in threadToTimeline.get(thread).slots}
-    {#if slot_count > skipSlots}
+    {#if slot_count > slots.skipped}
         <div class="slot slot-info"><span title="Slot {slot_count}: {slot.from} - {slot.to}/{totalTime} ms">{thread} - slot #{slot_count}</span></div>
         <div class="slot {#if slot.steps.empty}empty{#else}full{/if}">
         {#for step in slot.steps}
