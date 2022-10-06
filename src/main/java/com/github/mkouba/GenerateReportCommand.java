@@ -2,27 +2,34 @@ package com.github.mkouba;
 
 import java.io.File;
 import java.io.IOException;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
+import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
-import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Map.Entry;
-import java.util.OptionalInt;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.stream.Collectors;
-import java.util.stream.IntStream;
+import java.util.Objects;
+import java.util.Set;
+
+import javax.enterprise.event.Observes;
 
 import org.jboss.logging.Logger;
 
-import com.github.mkouba.GenerateReportCommand.Timeline.Slot;
+import com.github.mkouba.GenerateReportCommand.DependecyGraph.Link;
+import com.github.mkouba.GenerateReportCommand.DependecyGraph.Node;
 
-import io.quarkus.logging.Log;
+import io.quarkus.qute.EngineBuilder;
+import io.quarkus.qute.Location;
+import io.quarkus.qute.Template;
+import io.vertx.core.json.JsonArray;
+import io.vertx.core.json.JsonObject;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
@@ -34,263 +41,270 @@ public class GenerateReportCommand implements Runnable {
 
     static final String BUILD_THREAD_PREFIX = "build_";
 
-    @Parameters(paramLabel = "<file>", description = "Build log file.")
+    @Parameters(paramLabel = "<file>", description = "Build metrics JSON file.")
     String file;
-
-    @Option(names = "--top", defaultValue = "10")
-    int top;
-
-    @Option(names = "--slot", defaultValue = "50")
-    long slot;
 
     @Option(names = "--out", defaultValue = "report.html")
     String out;
 
+    @Location("build-steps.html")
+    Template buildSteps;
+
+    static void configureEngine(@Observes EngineBuilder builder) {
+        builder.addValueResolver(new JsonObjectValueResolver());
+    }
+
     @Override
     public void run() {
-        File buildLog = new File(file);
-        if (!buildLog.canRead()) {
-            throw new IllegalArgumentException("Build log file cannot be read: " + buildLog);
+        File metricsJsonFile = new File(file);
+        if (!metricsJsonFile.canRead()) {
+            throw new IllegalArgumentException("Build metrics file cannot be read: " + metricsJsonFile);
         }
-        LOG.infof("Generate report from the build log file %s", buildLog);
-        Map<String, BuildStep> steps = new HashMap<>();
-        Map<String, String> currentDups = new HashMap<>();
-        AtomicInteger duplicates = new AtomicInteger();
-        LocalTime augmentationStarted = null;
-        LocalTime augmentationFinished = null;
-        String appName = null;
-
-        try {
-            List<String> lines = Files.readAllLines(buildLog.toPath());
-            for (String line : lines) {
-                if (line.contains("Starting step")) {
-                    // 14:37:10.636 [build-14] [DEBUG] [io.quarkus.builder] Starting step "io.quarkus.deployment.steps.ClassTransformingBuildStep#handleClassTransformation"
-                    String[] parts = line.split("\\s+");
-                    LocalTime started = LocalTime.parse(parts[0], DateTimeFormatter.ISO_LOCAL_TIME);
-                    String thread = parts[1].substring(1, parts[1].length() - 1);
-                    String name = parts[6].substring(1, parts[6].length() - 1).trim();
-                    BuildStep step = steps.get(name);
-                    if (step != null && (step.isFinished() || !step.thread.equals(thread))) {
-                        String newName = name + "_dup" + duplicates.incrementAndGet();
-                        LOG.warnf("Step with the same name already exists - using dup suffix: %s", newName);
-                        currentDups.put(name, newName);
-                        steps.put(newName, new BuildStep(newName, thread, started));
-                    } else {
-                        steps.put(name, new BuildStep(name, thread, started));
-                    }
-                } else if (line.contains("Finished step")) {
-                    // 14:37:10.873 [build-14] [DEBUG] [io.quarkus.builder] Finished step "io.quarkus.deployment.steps.ClassTransformingBuildStep#handleClassTransformation" in 237 ms 
-                    String[] parts = line.split("\\s+");
-                    LocalTime finished = LocalTime.parse(parts[0], DateTimeFormatter.ISO_LOCAL_TIME);
-                    String thread = parts[1].substring(1, parts[1].length() - 1);
-                    String name = parts[6].substring(1, parts[6].length() - 1).trim();
-                    BuildStep step = steps.get(name);
-                    if (step == null || step.isFinished() || !step.thread.equals(thread)) {
-                        step = steps.get(currentDups.get(name));
-                        if (step == null) {
-                            throw new IllegalStateException("Step not started: " + name);
-                        }
-                    }
-                    if (step.isFinished()) {
-                        throw new IllegalStateException("Steps of the same name already finished: " + step);
-                    }
-                    step.finished = finished;
-                } else if (line.contains("Beginning Quarkus augmentation")) {
-                    augmentationStarted = LocalTime.parse(line.split("\\s+")[0], DateTimeFormatter.ISO_LOCAL_TIME);
-                } else if (line.contains("Quarkus augmentation completed")) {
-                    augmentationFinished = LocalTime.parse(line.split("\\s+")[0], DateTimeFormatter.ISO_LOCAL_TIME);
-                } else if (line.contains("(f) finalName")) {
-                    appName = line.substring(line.lastIndexOf("=") + 1, line.length()).trim();
-                }
-            }
-        } catch (IOException e) {
-            throw new IllegalStateException(e);
-        }
-
-        Map<String, List<BuildStep>> threadToSteps = new HashMap<>();
-        for (BuildStep step : steps.values()) {
-            List<BuildStep> threadSteps = threadToSteps.get(step.thread);
-            if (threadSteps == null) {
-                threadSteps = new ArrayList<>();
-                threadToSteps.put(step.thread, threadSteps);
-            }
-            threadSteps.add(step);
-        }
-        List<String> threads = threadToSteps.keySet().stream().sorted(new Comparator<String>() {
-
-            @Override
-            public int compare(String o1, String o2) {
-                int o1n = Integer.parseInt(o1.substring(BUILD_THREAD_PREFIX.length()));
-                int o2n = Integer.parseInt(o2.substring(BUILD_THREAD_PREFIX.length()));
-                return Integer.compare(o1n, o2n);
-            }
-        }).collect(Collectors.toList());
-        threadToSteps.values().forEach(l -> l.sort(new Comparator<BuildStep>() {
-            @Override
-            public int compare(BuildStep o1, BuildStep o2) {
-                return o1.started.compareTo(o2.started);
-            }
-        }));
-
-        Duration slotDuration = Duration.ofMillis(slot);
-
-        Map<String, Timeline> threadToTimeline = new HashMap<>();
-        for (Entry<String, List<BuildStep>> e : threadToSteps.entrySet()) {
-            threadToTimeline.put(e.getKey(),
-                    Timeline.from(e.getKey(), e.getValue(), slotDuration, augmentationStarted, augmentationFinished));
-        }
-
-        int numberOfSlots = threadToTimeline.values().iterator().next().slots.size();
-
-        // Skip first N empty slots...
-        int skipSlots = numberOfSlots;
-        for (Timeline timeline : threadToTimeline.values()) {
-            OptionalInt firstNonEmpty = IntStream.range(0, timeline.slots.size())
-                    .filter(i -> !timeline.slots.get(i).steps.isEmpty())
-                    .findFirst();
-            if (firstNonEmpty.isPresent() && firstNonEmpty.getAsInt() < skipSlots) {
-                skipSlots = firstNonEmpty.getAsInt();
-            }
-        }
-
-        List<Entry<Integer, Slot>> slotSteps = new ArrayList<>();
-        for (int j = 0; j < numberOfSlots; j++) {
-            if (j <= skipSlots) {
-                continue;
-            }
-            List<BuildStep> allSteps = new ArrayList<>();
-            for (Timeline timeline : threadToTimeline.values()) {
-                if (!timeline.slots.get(j).steps.isEmpty()) {
-                    allSteps.addAll(timeline.slots.get(j).steps);
-                }
-            }
-            slotSteps.add(Map.entry(j + 1, new Slot(0, 0, allSteps, augmentationStarted, augmentationFinished)));
-        }
-        slotSteps.sort(new Comparator<Entry<Integer, Slot>>() {
-
-            @Override
-            public int compare(Entry<Integer, Slot> o1, Entry<Integer, Slot> o2) {
-                return Integer.compare(o1.getValue().steps.size(), o2.getValue().steps.size());
-            }
-        });
-
-        List<BuildStep> sortedSteps = steps.values().stream().sorted(new Comparator<BuildStep>() {
-            @Override
-            public int compare(BuildStep o1, BuildStep o2) {
-                return o2.getTime().compareTo(o1.getTime());
-            }
-        }).collect(Collectors.toList());
+        LOG.infof("Generate report from the build log file %s", metricsJsonFile.getAbsolutePath());
 
         File output = new File(out);
         try {
             Files.writeString(output.toPath(),
-                    Templates.report(sortedSteps, top, Duration.between(augmentationStarted, augmentationFinished).toMillis(),
-                            threadToTimeline, threads, appName, slotSteps,
-                            new SlotsInfo(slotDuration, skipSlots, numberOfSlots))
-                            .render());
+                    buildSteps.data("metrics", loadBuildMetrics(metricsJsonFile.toPath())).render());
         } catch (IOException e) {
             throw new IllegalArgumentException(e);
         }
-
-        Log.infof("Executed %s steps on %s threads in %s ms", steps.size(), threadToSteps.size(),
-                Duration.between(augmentationStarted, augmentationFinished).toMillis());
     }
 
-    public static class Timeline {
+    Map<String, Object> loadBuildMetrics(Path metricsJsonFile) {
 
-        public List<Slot> slots;
+        Map<String, Object> metrics = new HashMap<>();
+        Map<String, JsonObject> stepIdToRecord = new HashMap<>();
+        Map<Integer, JsonObject> recordIdToRecord = new HashMap<>();
+        Map<String, List<JsonObject>> threadToRecords = new HashMap<>();
+        long buildDuration = 0;
+        LocalTime buildStarted = null;
 
-        public Timeline(List<Slot> slots) {
-            this.slots = slots;
-        }
+        if (Files.isReadable(metricsJsonFile)) {
+            try {
+                JsonObject data = new JsonObject(Files.readString(metricsJsonFile));
+                buildDuration = data.getLong("duration");
+                buildStarted = LocalDateTime
+                        .parse(data.getString("started"), DateTimeFormatter.ISO_LOCAL_DATE_TIME).toLocalTime();
+                JsonArray records = data.getJsonArray("records");
 
-        public static class Slot {
-
-            public long from;
-            public long to;
-            public LocalTime start;
-            public LocalTime end;
-            public List<BuildStep> steps;
-
-            public Slot(long from, long to, List<BuildStep> steps, LocalTime start, LocalTime end) {
-                this.steps = steps;
-                this.from = from;
-                this.to = to;
-                this.start = start;
-                this.end = end;
+                for (Object record : records) {
+                    JsonObject recordObj = (JsonObject) record;
+                    recordObj.put("encodedStepId", URLEncoder.encode(recordObj.getString("stepId"),
+                            StandardCharsets.UTF_8.toString()));
+                    String thread = recordObj.getString("thread");
+                    stepIdToRecord.put(recordObj.getString("stepId"), recordObj);
+                    recordIdToRecord.put(recordObj.getInteger("id"), recordObj);
+                    List<JsonObject> steps = threadToRecords.get(thread);
+                    if (steps == null) {
+                        steps = new ArrayList<>();
+                        threadToRecords.put(thread, steps);
+                    }
+                    steps.add(recordObj);
+                }
+                metrics.put("records", records);
+                metrics.put("duration", buildDuration);
+                metrics.put("buildTarget", data.getString("buildTarget"));
+            } catch (IOException e) {
+                LOG.error(e);
             }
         }
 
-        static Timeline from(String thread, List<BuildStep> steps, Duration slotDuration, LocalTime augmentationStarted,
-                LocalTime augmentationFinished) {
+        // Build dependency graphs
+        Map<String, DependecyGraph> dependencyGraphs = new HashMap<>();
+        for (Map.Entry<String, JsonObject> e : stepIdToRecord.entrySet()) {
+            dependencyGraphs.put(e.getKey(),
+                    buildDependencyGraph(e.getValue(), stepIdToRecord, recordIdToRecord));
+        }
+        metrics.put("dependencyGraphs", dependencyGraphs);
 
-            List<Slot> slots = new ArrayList<>();
-            LocalTime from = augmentationStarted;
-            LocalTime to = augmentationStarted.plus(slotDuration);
+        // Time slots
+        long slotDuration = Math.max(10, buildDuration / 100);
+        List<Long> slots = new ArrayList<>();
+        long currentSlot = slotDuration;
+        while (currentSlot < buildDuration) {
+            slots.add(currentSlot);
+            currentSlot += slotDuration;
+        }
+        if (currentSlot != buildDuration) {
+            slots.add(buildDuration);
+        }
+        metrics.put("slots", slots);
 
-            while (to.isBefore(augmentationFinished)) {
-                List<BuildStep> slotSteps = new ArrayList<>();
-                for (BuildStep step : steps) {
-                    if (step.started.isBefore(to) && from.isBefore(step.finished)) {
-                        slotSteps.add(step);
+        Map<String, List<List<String>>> threadToSlotRecords = new HashMap<>();
+        DateTimeFormatter formatter = DateTimeFormatter.ofPattern("HH:mm:ss.SSS");
+
+        for (Map.Entry<String, List<JsonObject>> entry : threadToRecords.entrySet()) {
+            String thread = entry.getKey();
+            List<JsonObject> records = entry.getValue();
+            List<List<String>> threadSlots = new ArrayList<>();
+
+            for (Long slot : slots) {
+                List<String> slotRecords = new ArrayList<>();
+                for (JsonObject record : records) {
+                    LocalTime started = LocalTime.parse(record.getString("started"), formatter);
+                    long startAt = Duration.between(buildStarted, started).toMillis();
+                    if (startAt < slot && (slot - slotDuration) < (startAt + record.getLong("duration"))) {
+                        slotRecords.add(record.getString("stepId"));
                     }
                 }
-                slots.add(new Slot(augmentationStarted.until(from, ChronoUnit.MILLIS),
-                        augmentationStarted.until(to, ChronoUnit.MILLIS), slotSteps, from, to));
-                from = from.plus(slotDuration);
-                to = to.plus(slotDuration);
+                threadSlots.add(slotRecords);
+            }
+            threadToSlotRecords.put(thread, threadSlots);
+        }
+        metrics.put("threadSlotRecords", threadToSlotRecords);
+
+        return metrics;
+    }
+
+    // TODO
+
+    DependecyGraph buildDependencyGraph(JsonObject step, Map<String, JsonObject> stepIdToRecord,
+            Map<Integer, JsonObject> recordIdToRecord) {
+        Set<Node> nodes = new HashSet<>();
+        Set<Link> links = new HashSet<>();
+
+        addNodesDependents(step, nodes, links, step, stepIdToRecord, recordIdToRecord);
+        addNodeDependencies(step, nodes, links, step, stepIdToRecord, recordIdToRecord);
+        return new DependecyGraph(nodes, links);
+    }
+
+    void addNodesDependents(JsonObject root, Set<Node> nodes, Set<Link> links, JsonObject record,
+            Map<String, JsonObject> stepIdToRecord, Map<Integer, JsonObject> recordIdToRecord) {
+        String stepId = record.getString("stepId");
+        nodes.add(new Node(stepId, record.getString("encodedStepId")));
+        for (Object dependentRecordId : record.getJsonArray("dependents")) {
+            int recordId = (int) dependentRecordId;
+            if (recordId != record.getInteger("id")) {
+                JsonObject dependentRecord = recordIdToRecord.get(recordId);
+                String dependentStepId = dependentRecord.getString("stepId");
+                links.add(Link.dependent(root.equals(record), dependentStepId, stepId));
+                nodes.add(new Node(dependentStepId, dependentRecord.getString("encodedStepId")));
+                // NOTE: we do not fetch transient dependencies yet because the UI is not ready to show so many nodes
+                // if (added) {
+                // addNodesDependents(root, nodes, links, dependentRecord, stepIdToRecord, recordIdToRecord);
+                // }
+            }
+        }
+    }
+
+    void addNodeDependencies(JsonObject root, Set<Node> nodes, Set<Link> links, JsonObject record,
+            Map<String, JsonObject> stepIdToRecord, Map<Integer, JsonObject> recordIdToRecord) {
+        for (Map.Entry<String, JsonObject> entry : stepIdToRecord.entrySet()) {
+            for (Object dependentRecordId : entry.getValue().getJsonArray("dependents")) {
+                int recordId = (int) dependentRecordId;
+                if (record.getInteger("id") == recordId) {
+                    links.add(Link.dependency(root.equals(record),
+                            record.getString("stepId"), entry.getValue().getString("stepId")));
+                    nodes.add(new Node(entry.getValue().getString("stepId"), entry.getValue().getString("encodedStepId")));
+                    // NOTE: we do not fetch transient dependencies yet because the UI is not ready to show so many nodes
+                    // if (added) {
+                    // addNodeDependencies(root, nodes, links, entry.getValue(), stepIdToRecord, recordIdToRecord);
+                    // }
+                }
+            }
+        }
+    }
+
+    public static class DependecyGraph {
+
+        public final Set<Node> nodes;
+        public final Set<Link> links;
+
+        public DependecyGraph(Set<Node> nodes, Set<Link> links) {
+            this.nodes = nodes;
+            this.links = links;
+        }
+
+        public static class Node {
+
+            public final String stepId;
+            public final String simpleName;
+            public final String encodedStepId;
+
+            public Node(String stepId, String encodedStepId) {
+                this.stepId = stepId;
+                this.encodedStepId = encodedStepId;
+                int lastDot = stepId.lastIndexOf('.');
+                String simple = lastDot > 0 ? stepId.substring(lastDot + 1) : stepId;
+                int hash = simple.indexOf('#');
+                if (hash > 0) {
+                    StringBuilder sb = new StringBuilder();
+                    char[] chars = simple.substring(0, hash).toCharArray();
+                    for (char c : chars) {
+                        if (Character.isUpperCase(c)) {
+                            sb.append(c);
+                        }
+                    }
+                    simple = sb + simple.substring(hash);
+                }
+                this.simpleName = simple;
             }
 
-            LOG.debugf("Timeline created for thread %s [slots=%s]", thread, slots.size());
-            return new Timeline(slots);
+            @Override
+            public int hashCode() {
+                return Objects.hash(stepId);
+            }
+
+            @Override
+            public boolean equals(Object obj) {
+                if (this == obj) {
+                    return true;
+                }
+                if (obj == null) {
+                    return false;
+                }
+                if (getClass() != obj.getClass()) {
+                    return false;
+                }
+                Node other = (Node) obj;
+                return Objects.equals(stepId, other.stepId);
+            }
+
         }
 
-    }
+        public static class Link {
 
-    public static class BuildStep {
+            static Link dependent(boolean direct, String source, String target) {
+                return new Link(source, target, direct ? "directDependent" : "dependency");
+            }
 
-        public String name;
-        public String thread;
-        public LocalTime started;
-        public LocalTime finished;
+            static Link dependency(boolean direct, String source, String target) {
+                return new Link(source, target, direct ? "directDependency" : "dependency");
+            }
 
-        public BuildStep(String name, String thread, LocalTime started) {
-            this.name = name;
-            this.thread = thread;
-            this.started = started;
+            public final String source;
+            public final String target;
+            public final String type;
+
+            public Link(String source, String target, String type) {
+                this.source = source;
+                this.target = target;
+                this.type = type;
+            }
+
+            @Override
+            public int hashCode() {
+                return Objects.hash(source, target);
+            }
+
+            @Override
+            public boolean equals(Object obj) {
+                if (this == obj) {
+                    return true;
+                }
+                if (obj == null) {
+                    return false;
+                }
+                if (getClass() != obj.getClass()) {
+                    return false;
+                }
+                Link other = (Link) obj;
+                return Objects.equals(source, other.source) && Objects.equals(target, other.target);
+            }
+
         }
 
-        public Duration getTime() {
-            return Duration.between(started, finished);
-        }
-
-        public boolean isFinished() {
-            return finished != null;
-        }
-
-        public String getSimpleName() {
-            int lastDot = name.lastIndexOf('.');
-            return lastDot == -1 ? name : name.substring(lastDot + 1);
-        }
-
-        @Override
-        public String toString() {
-            return "BuildStep [name=" + name + ", thread=" + thread + ", started=" + started + ", finished=" + finished + "]";
-        }
-
-    }
-
-    public static class SlotsInfo {
-
-        public final Duration duration;
-        public final int skipped;
-        public final long count;
-
-        public SlotsInfo(Duration duration, int skipped, long count) {
-            this.duration = duration;
-            this.skipped = skipped;
-            this.count = count;
-        }
     }
 
 }
