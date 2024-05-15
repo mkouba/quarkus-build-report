@@ -18,8 +18,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
-import javax.enterprise.event.Observes;
-
 import org.jboss.logging.Logger;
 
 import com.github.mkouba.GenerateReportCommand.DependecyGraph.Link;
@@ -30,6 +28,7 @@ import io.quarkus.qute.Location;
 import io.quarkus.qute.Template;
 import io.vertx.core.json.JsonArray;
 import io.vertx.core.json.JsonObject;
+import jakarta.enterprise.event.Observes;
 import picocli.CommandLine.Command;
 import picocli.CommandLine.Option;
 import picocli.CommandLine.Parameters;
