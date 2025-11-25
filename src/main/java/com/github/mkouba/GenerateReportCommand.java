@@ -102,6 +102,7 @@ public class GenerateReportCommand implements Runnable {
                     steps.add(recordObj);
                 }
                 metrics.put("records", records);
+                metrics.put("items", data.getJsonArray("items"));
                 metrics.put("duration", buildDuration);
                 metrics.put("buildTarget", data.getString("buildTarget"));
             } catch (IOException e) {
