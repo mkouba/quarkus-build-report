@@ -92,7 +92,8 @@ public class GenerateReportCommand implements Runnable {
                     recordObj.put("encodedStepId", URLEncoder.encode(recordObj.getString("stepId"),
                             StandardCharsets.UTF_8.toString()));
                     String thread = recordObj.getString("thread");
-                    stepIdToRecord.put(recordObj.getString("stepId"), recordObj);
+                    String stepId = recordObj.getString("stepId");
+                    stepIdToRecord.put(stepId, recordObj);
                     recordIdToRecord.put(recordObj.getInteger("id"), recordObj);
                     List<JsonObject> steps = threadToRecords.get(thread);
                     if (steps == null) {
@@ -100,6 +101,7 @@ public class GenerateReportCommand implements Runnable {
                         threadToRecords.put(thread, steps);
                     }
                     steps.add(recordObj);
+                    recordObj.put("stepIdShort", shortName(stepId));
                 }
                 metrics.put("records", records);
                 metrics.put("items", data.getJsonArray("items"));
@@ -156,8 +158,13 @@ public class GenerateReportCommand implements Runnable {
 
         return metrics;
     }
-
-    // TODO
+    
+    String shortName(String name) {
+        if (name.length() <= 70) {
+            return name;
+        }
+        return name.substring(0, 69) + "...";
+    }
 
     DependecyGraph buildDependencyGraph(JsonObject step, Map<String, JsonObject> stepIdToRecord,
             Map<Integer, JsonObject> recordIdToRecord) {
